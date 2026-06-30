@@ -58,7 +58,8 @@ function do_open(mainFig)
 
     or5Fig = uifigure('Name', '路径规划 (OR5)', ...
                       'Position', [180 180 300 480], ...
-                      'Resize', 'off');
+                      'Resize', 'off', ...
+                      'WindowStyle', 'alwaysontop');
     setappdata(or5Fig, 'mainFig', mainFig);
 
     gl = uigridlayout(or5Fig, [20 1]);

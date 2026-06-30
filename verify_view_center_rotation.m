@@ -2,7 +2,7 @@ fig = main();
 S = getappdata(fig, 'S');
 
 target = [1000.5, 600.5];
-S.viewZoom = 2;
+S.userZoom = 2;
 S.viewCenter = target;
 setappdata(fig, 'S', S);
 set(S.ax, ...

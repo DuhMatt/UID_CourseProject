@@ -33,7 +33,8 @@ function do_open(mainFig)
 
     or1Fig = uifigure('Name', '道路骨架工具 (OR1)', ...
                       'Position', [150 150 280 480], ...
-                      'Resize', 'off');
+                      'Resize', 'off', ...
+                      'WindowStyle', 'alwaysontop');
     setappdata(or1Fig, 'mainFig', mainFig);
 
     gl = uigridlayout(or1Fig, [18 1]);

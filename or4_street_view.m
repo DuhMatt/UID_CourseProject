@@ -20,11 +20,37 @@ function varargout = or4_street_view(action, mainFig, varargin)
                 selType = varargin{3};
             end
             do_click(mainFig, varargin{1}, varargin{2}, selType);
+        case 'sync'
+            do_sync(mainFig);
         case 'getCam'
             varargout{1} = doGetCam(mainFig);
         case 'drawCam'
             varargout{1} = doDrawCam(mainFig, varargin{1});
     end
+end
+
+%% ====================================================================
+%   同步 IV 列表（main.m 在 IV 增删后调用）
+%% ====================================================================
+function do_sync(mainFig)
+    S = getappdata(mainFig, 'S');
+    if ~isfield(S, 'or4Fig') || isempty(S.or4Fig) || ~isvalid(S.or4Fig)
+        return;
+    end
+    if ~isfield(S, 'or4') || ~isfield(S.or4, 'vehDrop') || ~isvalid(S.or4.vehDrop)
+        return;
+    end
+
+    % 重建车辆下拉列表
+    vehItems = {'(手动设置)'};
+    if ~isempty(S.vehicles)
+        for i = 1:numel(S.vehicles)
+            vehItems{end+1} = sprintf('#%d', S.vehicles(i).id);   %#ok<AGROW>
+        end
+    end
+    S.or4.vehDrop.Items = vehItems;
+    S.or4.vehDrop.Value = vehItems{1};
+    setappdata(mainFig, 'S', S);
 end
 
 
@@ -58,13 +84,11 @@ function do_open(mainFig)
         cam.yawDegree = mod(v.angle + 90, 360);   % 图像角 -> yaw（0°=北, 90°=东）
     end
 
-    viewW = 520;
-    viewH = 360;
-
     % ---- 创建弹窗 ----
     or4Fig = uifigure('Name', 'OR4 虚拟街景', ...
-                      'Position', [120 120 900 640], ...
-                      'Resize', 'on');
+                      'Position', [120 120 1000 750], ...
+                      'Resize', 'on', ...
+                      'WindowStyle', 'alwaysontop');
     setappdata(or4Fig, 'mainFig', mainFig);
 
     gl = uigridlayout(or4Fig, [1 2]);
@@ -186,14 +210,14 @@ function do_open(mainFig)
     or4.infoLabel   = infoLabel;
     or4.viewAx      = viewAx;
     or4.cam         = cam;
-    or4.viewW       = viewW;
-    or4.viewH       = viewH;
+    or4.cachedImage = [];   % 缓存渲染结果，resize 时复用
 
     S.or4Fig = or4Fig;
     S.or4    = or4;
     setappdata(mainFig, 'S', S);
 
     set(or4Fig, 'CloseRequestFcn', @(~,~) do_close(mainFig, or4Fig));
+    set(or4Fig, 'SizeChangedFcn', @(~,~) onOR4Resize(or4Fig));
 
     % 仅在默认相机点有效时初始渲染，避免打开窗口就弹错误
     [camCol, camRow] = worldToPixel(cam.realX, cam.realY, S.scale, S.mapH);
@@ -383,21 +407,61 @@ function onRender(or4Fig)
     S.or4.cam = cam;
     setappdata(mainFig, 'S', S);
 
-    viewW = S.or4.viewW;
-    viewH = S.or4.viewH;
+    % 根据右侧 axes 实际像素尺寸动态计算渲染分辨率
+    drawnow;   % 确保 uifigure 布局完成后再读取像素尺寸
+    axPosPx = getpixelposition(S.or4.viewAx, true);
+    viewW = max(520, min(900, round(axPosPx(3))));   % 下限 520px（原固定尺寸），上限 900px 防过慢
+    viewH = max(360, min(700, round(axPosPx(4))));   % 下限 360px（原固定尺寸）
 
     % 渲染虚拟视图（光线投射）
     viewImage = renderStreetView(S.mapOrigin, cam, viewH, viewW, S.scale, S.mapH);
 
-    % 显示街景
-    imshow(viewImage, 'Parent', S.or4.viewAx);
-    axis(S.or4.viewAx, 'image');
+    % 缓存图像供 resize 复用
+    S.or4.cachedImage = viewImage;
+    setappdata(mainFig, 'S', S);
 
-    % 通过 main.m 的刷新函数更新主地图（refreshDisplay 会自动叠加相机标记）
+    % 显示街景（记录窗口位置，防止 imshow/image 触发连锁收缩）
+    savedPos = get(or4Fig, 'Position');
+    showOR4Image(or4Fig);
+    curPos = get(or4Fig, 'Position');
+    if curPos(3) < 1000 || curPos(4) < 750
+        savedPos(3) = max(savedPos(3), 1000);
+        savedPos(4) = max(savedPos(4), 750);
+        set(or4Fig, 'Position', savedPos);
+    end
+
+    % 通过 main.m 的刷新函数更新主地图
     S.fn.refresh(mainFig);
 
-    S.or4.infoLabel.Text = sprintf('相机: (%.0f,%.0f)m  yaw=%.0f pitch=%.0f h=%.0f  焦距=%dpx', ...
-        cam.realX, cam.realY, cam.yawDegree, cam.pitchDegree, cam.height, cam.focalPixel);
+    S.or4.infoLabel.Text = sprintf('相机: (%.0f,%.0f)m  yaw=%.0f pitch=%.0f h=%.0f  焦距=%dpx  输出=%dx%d', ...
+        cam.realX, cam.realY, cam.yawDegree, cam.pitchDegree, cam.height, cam.focalPixel, viewW, viewH);
+end
+
+
+function showOR4Image(or4Fig)
+    mainFig = getappdata(or4Fig, 'mainFig');
+    S = getappdata(mainFig, 'S');
+    if isempty(S.or4.cachedImage), return; end
+    img = S.or4.cachedImage;
+    % 用 image() 代替 imshow()，避免 uiaxes 被替换导致窗口连锁收缩
+    cla(S.or4.viewAx);
+    image(S.or4.viewAx, 'CData', img);
+    set(S.or4.viewAx, 'XTick', [], 'YTick', [], 'Box', 'off', ...
+        'XColor', 'none', 'YColor', 'none', 'YDir', 'reverse');
+    daspect(S.or4.viewAx, [1 1 1]);
+    axis(S.or4.viewAx, 'tight');
+end
+
+
+function onOR4Resize(or4Fig)
+    if ~isvalid(or4Fig), return; end
+    pos = get(or4Fig, 'Position');
+    if pos(3) < 1000 || pos(4) < 750
+        pos(3) = max(pos(3), 1000);
+        pos(4) = max(pos(4), 750);
+        set(or4Fig, 'Position', pos);
+    end
+    showOR4Image(or4Fig);
 end
 
 

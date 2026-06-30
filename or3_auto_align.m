@@ -12,6 +12,14 @@ function varargout = or3_auto_align(action, mainFig, varargin)
 %        绕任意点 (cx,cy) 旋转图像 img（手搓反向映射），用于车头朝上模式。
 
     switch action
+        case 'open'
+            or3_open(mainFig);
+        case 'headUpToggled'
+            or3_headUpToggled(mainFig, varargin{1});
+        case 'headUpParams'
+            [varargout{1}, varargout{2}, varargout{3}] = or3_getHeadUpParams(mainFig);
+        case 'alignCurrent'
+            or3_alignCurrent(mainFig);
         case 'findAngle'
             varargout{1} = findNearestRoadAngle(mainFig, varargin{1}, varargin{2});
         case 'rotateAround'
@@ -157,4 +165,139 @@ function d = ptToSeg(P, A, B)
     end
     t = max(0, min(1, dot(AP, AB) / ab2));
     d = norm(P - (A + t * AB));
+end
+
+
+%% ====================================================================
+%   or3_open — 打开 OR3 车辆朝向工具弹窗
+%% ====================================================================
+function or3_open(mainFig)
+    S = getappdata(mainFig, 'S');
+    if isfield(S, 'or3Fig') && ~isempty(S.or3Fig) && isvalid(S.or3Fig)
+        figure(S.or3Fig);
+        return;
+    end
+    or3Fig = uifigure('Name', 'OR3 车辆朝向工具', ...
+                      'Position', [160 160 300 260], ...
+                      'Resize', 'off', ...
+                      'WindowStyle', 'alwaysontop');
+    setappdata(or3Fig, 'mainFig', mainFig);
+
+    gl = uigridlayout(or3Fig, [7 1]);
+    gl.RowHeight = repmat({'fit'}, 7, 1);
+    gl.ColumnWidth = {'1x'};
+
+    r = 0;
+    function c = addC(type, rowIdx, varargin)
+        c = feval(['ui' type], gl, varargin{:});
+        c.Layout.Row = rowIdx; c.Layout.Column = 1;
+    end
+
+    r = r + 1;
+    addC('label', r, 'Text', 'OR3 车辆朝向工具', ...
+         'FontSize', 14, 'FontWeight', 'bold', 'HorizontalAlignment', 'center');
+    r = r + 1;
+    addC('label', r, 'Text', '──── 功能说明 ────', 'FontSize', 11, 'FontWeight', 'bold');
+    r = r + 1;
+    addC('label', r, 'Text', '自动对齐：加载车辆时自动与道路走向对齐。', ...
+         'FontSize', 9, 'WordWrap', 'on');
+    r = r + 1;
+    addC('label', r, 'Text', '车头朝上：地图围绕选定车辆旋转，使车头始终指向上方。', ...
+         'FontSize', 9, 'WordWrap', 'on');
+    r = r + 1;
+    addC('label', r, 'Text', '──── 操作 ────', 'FontSize', 11, 'FontWeight', 'bold');
+    r = r + 1;
+    addC('button', r, 'Text', '对齐到道路（当前车辆）', ...
+         'ButtonPushedFcn', @(~,~) or3_auto_align('alignCurrent', mainFig));
+    r = r + 1;
+    addC('button', r, 'Text', '关闭', ...
+         'ButtonPushedFcn', @(~,~) close(or3Fig));
+
+    S = getappdata(mainFig, 'S');
+    S.or3Fig = or3Fig;
+    setappdata(mainFig, 'S', S);
+    set(or3Fig, 'CloseRequestFcn', @(~,~) close(or3Fig));
+end
+
+
+%% ====================================================================
+%   or3_alignCurrent — 将当前选中车辆对齐到最近道路方向
+%% ====================================================================
+function or3_alignCurrent(mainFig)
+    S = getappdata(mainFig, 'S');
+    if isempty(S.vehicles)
+        uialert(mainFig, '当前没有已加载的车辆。', '提示');
+        return;
+    end
+    sel = S.handles.ivDropdown.Value;
+    tok = regexp(sel, '#(\d+)', 'tokens', 'once');
+    if isempty(tok)
+        uialert(mainFig, '请先在下拉列表中选中一辆车辆。', '提示');
+        return;
+    end
+    vid = str2double(tok{1});
+    idx = find(arrayfun(@(v) v.id==vid, S.vehicles), 1);
+    if isempty(idx), return; end
+    newAngle = or3_auto_align('findAngle', mainFig, S.vehicles(idx).cx, S.vehicles(idx).cy);
+    S.vehicles(idx).angle = newAngle;
+    if S.headUpMode
+        S.headUpAngle = newAngle;
+    end
+    setappdata(mainFig, 'S', S);
+    S.fn.refresh(mainFig);
+    if isfield(S.handles,'angleSlider') && isvalid(S.handles.angleSlider)
+        S.handles.angleSlider.Value = newAngle;
+    end
+    S.fn.setStatus(mainFig, sprintf('车辆 #%d 朝向已对齐至 %.1f°', vid, newAngle));
+end
+
+
+%% ====================================================================
+%   or3_headUpToggled — 切换车头朝上显示模式
+%% ====================================================================
+function or3_headUpToggled(mainFig, src)
+    S = getappdata(mainFig, 'S');
+    S.headUpMode = src.Value;
+    if S.headUpMode
+        if ~isempty(S.vehicles) && isfield(S.handles,'ivDropdown') && isvalid(S.handles.ivDropdown)
+            sel = S.handles.ivDropdown.Value;
+            tok = regexp(sel, '#(\d+)', 'tokens', 'once');
+            if ~isempty(tok)
+                vid = str2double(tok{1});
+                idx = find(arrayfun(@(v) v.id==vid, S.vehicles), 1);
+                if ~isempty(idx)
+                    S.headUpAngle = S.vehicles(idx).angle;
+                end
+            end
+        end
+        S.fn.setStatus(mainFig, '车头朝上模式已启用：地图将围绕选定车辆旋转。');
+    else
+        S.fn.setStatus(mainFig, '车头朝上模式已关闭。');
+    end
+    setappdata(mainFig, 'S', S);
+    S.fn.refresh(mainFig);
+end
+
+
+%% ====================================================================
+%   or3_getHeadUpParams — 返回 [angle, cx, cy] 供车头朝上旋转
+%% ====================================================================
+function [angle, cx, cy] = or3_getHeadUpParams(mainFig)
+    S = getappdata(mainFig, 'S');
+    angle = S.headUpAngle;
+    cx = S.mapW / 2;
+    cy = S.mapH / 2;
+    if ~isempty(S.vehicles) && isfield(S.handles,'ivDropdown') && isvalid(S.handles.ivDropdown)
+        sel = S.handles.ivDropdown.Value;
+        tok = regexp(sel, '#(\d+)', 'tokens', 'once');
+        if ~isempty(tok)
+            vid = str2double(tok{1});
+            idx = find(arrayfun(@(v) v.id==vid, S.vehicles), 1);
+            if ~isempty(idx)
+                angle = S.vehicles(idx).angle;
+                cx    = S.vehicles(idx).cx;
+                cy    = S.vehicles(idx).cy;
+            end
+        end
+    end
 end
